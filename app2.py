@@ -168,17 +168,13 @@ def classify_audio(audio_path, model):
             })
 
         # Process results
-        # disease_array = ['Астма', 'Бронхоэктаз', 'Бронхиолит', 'Хроническая обструктивная болезнь лёгких', 
-        #                 'Здоров', 'Инфекции нижних дыхательных путей', 'Пневмония', 'Инфекционное заболевание верхних дыхательных путей']
-        disease_array = ['Пневмония', 'Бронхоэктаз', 'Бронхиолит', 'Пневмония', 
+        disease_array = ['Астма', 'Бронхоэктаз', 'Бронхиолит', 'Хроническая обструктивная болезнь лёгких', 
                         'Здоров', 'Инфекции нижних дыхательных путей', 'Пневмония', 'Инфекционное заболевание верхних дыхательных путей']
         result = result.flatten()
         
         # Get top-3 predictions
-        # sorted_indices = np.argsort(result)[::-1][:3]
-        sorted_indices = np.argsort(result)[::-1][0]
-
-
+        sorted_indices = np.argsort(result)[::-1][:3]
+        
         return [
             {
                 'disorder': disease_array[idx],
