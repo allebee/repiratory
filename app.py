@@ -92,9 +92,9 @@ def load_classification_model():
     try:
         # Define possible model paths
         model_paths = [
-            'model2.h5',
-            'models/model2.h5',
-            os.path.join(os.getcwd(), 'model2.h5')
+            'desease_model.h5',
+            'models/desease_model.h5',
+            os.path.join(os.getcwd(), 'desease_model.h5')
         ]
         
         # Try each path
@@ -176,7 +176,7 @@ def classify_audio(audio_path, model):
         
         # Get top-3 predictions
         # sorted_indices = np.argsort(result)[::-1][:3]
-        sorted_indices = np.argsort(result)[::-1][0]
+        sorted_indices = np.argsort(result)[::-1][:1]
 
 
         return [
@@ -288,17 +288,17 @@ def main():
                     *Основное предполагаемое заболевание*
                     """)
 
-                # Secondary results
-                st.markdown("#### Дополнительные возможные диагнозы:")
-                cols = st.columns(len(results[1:]))
-                for idx, result in enumerate(results[1:]):
-                    with cols[idx]:
-                        st.markdown(f"""
-                        <div class="result-card">
-                            <h5>{result['disorder']}</h5>
-                            <p>Вероятность: {result['probability']:.1f}%</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                # # Secondary results
+                # st.markdown("#### Дополнительные возможные диагнозы:")
+                # cols = st.columns(len(results[1:]))
+                # for idx, result in enumerate(results[1:]):
+                #     with cols[idx]:
+                #         st.markdown(f"""
+                #         <div class="result-card">
+                #             <h5>{result['disorder']}</h5>
+                #             <p>Вероятность: {result['probability']:.1f}%</p>
+                #         </div>
+                #         """, unsafe_allow_html=True)
 
                 # Disclaimer
                 st.markdown("""
