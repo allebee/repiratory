@@ -1,310 +1,183 @@
-import streamlit as st
-import os
-import tensorflow as tf
-from tensorflow import keras
+import librosa
 import numpy as np
-import librosa as lb
-import tempfile
 from tensorflow.keras.models import load_model
-import plotly.graph_objects as go
-from datetime import datetime
-import time
 
-# Page configuration with custom theme
-st.set_page_config(
-    page_title="AI Respiratory Disease Classifier",
-    page_icon="🫁",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for better styling
-st.markdown("""
-    <style>
-    .main {
-        padding: 2rem;
-    }
-    .stButton>button {
-        width: 100%;
-        height: 3rem;
-        margin-top: 1rem;
-    }
-    .upload-header {
-        text-align: center;
-        padding: 2rem;
-        background: #f8f9fa;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .result-card {
-        padding: 1.5rem;
-        border-radius: 10px;
-        background: #ffffff;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin: 1rem 0;
-    }
-    .disclaimer {
-        font-size: 0.9rem;
-        color: #6c757d;
-        padding: 1rem;
-        border-left: 3px solid #ffc107;
-        background: #fff8e1;
-        margin: 1rem 0;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Sidebar with app information
-with st.sidebar:
-    st.image("https://img.icons8.com/color/96/000000/stethoscope.png", width=96)
-    st.title("О приложении")
-    st.markdown("""
-    ### Как это работает
-    1. Загрузите аудиофайл с записью дыхания
-    2. AI модель проанализирует звуковые паттерны
-    3. Получите результаты анализа с вероятностями
+def segment_audio(x, sr, window_duration=5):
+    """
+    Segment audio into fixed-length windows
     
-    ### Поддерживаемые заболевания:
-    - 🌬️ Астма
-    - 🫁 Бронхоэктаз
-    - 🔬 Бронхиолит
-    - 🫧 ХОБЛ
-    - 🦠 ИНДП
-    - 🌡️ ИВДП
-    - 🫀 Пневмония
-    """)
+    Args:
+        x (numpy.ndarray): Audio signal
+        sr (int): Sample rate
+        window_duration (int): Duration of each window in seconds
     
-    st.markdown("---")
-    st.markdown("### История анализов")
-    if 'history' not in st.session_state:
-        st.session_state.history = []
+    Returns:
+        list: List of audio segments
+    """
+    window_length = sr * window_duration
+    segments = []
     
-    for item in st.session_state.history[-5:]:  # Show last 5 analyses
-        st.markdown(f"""
-        📊 **{item['date']}**  
-        Диагноз: {item['diagnosis']}  
-        Вероятность: {item['probability']:.1f}%
-        """)
+    # Calculate number of complete windows
+    num_windows = len(x) // window_length
+    
+    for i in range(num_windows):
+        start = i * window_length
+        end = start + window_length
+        segment = x[start:end]
+        segments.append(segment)
+    
+    return segments
 
-@st.cache_resource
-def load_classification_model():
-    """Load the trained model"""
+def preprocess_segment(x, sr_new=16000):
+    """
+    Preprocess a single audio segment
+    
+    Args:
+        x (numpy.ndarray): Audio segment
+        sr_new (int): Target sample rate
+    
+    Returns:
+        numpy.ndarray: Preprocessed features
+    """
+    # Extract MFCC features
+    feature = librosa.feature.mfcc(y=x, sr=sr_new)
+    
+    # Reshape for model input (1, 20, 157, 1)
+    feature = feature.reshape(1, 20, 157, 1)
+    
+    return feature
+
+def preprocess_audio(audio_file, sr_new=16000, window_duration=5):
+    """
+    Preprocess audio file for model inference with windowing
+    
+    Args:
+        audio_file (str): Path to audio file
+        sr_new (int): Target sample rate
+        window_duration (int): Duration of each window in seconds
+    
+    Returns:
+        list: List of preprocessed features for each window
+    """
+    # Load and resample audio
+    x, sr = librosa.load(audio_file, sr=sr_new)
+    
+    # Segment audio into windows
+    segments = segment_audio(x, sr_new, window_duration)
+    
+    # Preprocess each segment
+    processed_segments = []
+    for segment in segments:
+        processed = preprocess_segment(segment, sr_new)
+        processed_segments.append(processed)
+    
+    return processed_segments
+
+def aggregate_predictions(predictions, method='mean'):
+    """
+    Aggregate predictions from multiple windows
+    
+    Args:
+        predictions (list): List of prediction arrays
+        method (str): Aggregation method ('mean' or 'max')
+    
+    Returns:
+        numpy.ndarray: Aggregated predictions
+    """
+    if method == 'mean':
+        return np.mean(predictions, axis=0)
+    elif method == 'max':
+        return np.max(predictions, axis=0)
+    else:
+        raise ValueError(f"Unknown aggregation method: {method}")
+
+def predict_lung_disease(audio_file, model_path='/Users/user/Desktop/ml_tech/prediction_lung_disease_model.keras', 
+                        window_duration=5, aggregation_method='mean'):
+    """
+    Predict lung disease from audio file with windowing
+    
+    Args:
+        audio_file (str): Path to audio file
+        model_path (str): Path to saved model
+        window_duration (int): Duration of each window in seconds
+        aggregation_method (str): Method to aggregate predictions ('mean' or 'max')
+    
+    Returns:
+        dict: Prediction results
+    """
+    # Class labels from training
+    classes = ['Asthma', 'Bronchiectasis', 'Bronchiolitis', 'COPD', 
+              'Healthy', 'LRTI', 'Pneumonia', 'URTI']
+    
     try:
-        # Define possible model paths
-        model_paths = [
-            'model2.h5',
-            'models/model2.h5',
-            os.path.join(os.getcwd(), 'model2.h5')
-        ]
+        # Load model
+        model = load_model(model_path)
         
-        # Try each path
-        for path in model_paths:
-            if os.path.exists(path):
-                return load_model(path)
+        # Preprocess audio with windowing
+        processed_segments = preprocess_audio(audio_file, window_duration=window_duration)
         
-        st.error("Model file not found. Please ensure the model is uploaded to the app directory.")
-        st.stop()
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        st.stop()
-
-def create_gauge_chart(value, title):
-    """Create a gauge chart for probability visualization"""
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=value,
-        title={'text': title},
-        domain={'x': [0, 1], 'y': [0, 1]},
-        gauge={
-            'axis': {'range': [None, 100]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, 30], 'color': "lightgray"},
-                {'range': [30, 70], 'color': "gray"},
-                {'range': [70, 100], 'color': "darkgray"}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 90
-            }
-        }
-    ))
-    
-    fig.update_layout(height=300)
-    return fig
-
-def get_features_for_neural_network(path):
-    """Extract audio features with progress tracking"""
-    with st.spinner('Извлечение аудио характеристик...'):
-        sound_arr, sample_rate = lb.load(path)
-        mfcc = lb.feature.mfcc(y=sound_arr, sr=sample_rate)
-        cstft = lb.feature.chroma_stft(y=sound_arr, sr=sample_rate)
-        mspec = lb.feature.melspectrogram(y=sound_arr, sr=sample_rate)
-        return mfcc, cstft, mspec
-
-def classify_audio(audio_path, model):
-    """Classify audio with enhanced error handling and progress tracking"""
-    try:
-        # Feature extraction
-        mfcc_test, croma_test, mspec_test = get_features_for_neural_network(audio_path)
+        if not processed_segments:
+            return {'error': 'Audio file is too short'}
         
-        # Prepare input arrays
-        mfcc, cstft, mspec = [], [], []
-        mfcc.append(mfcc_test)
-        cstft.append(croma_test)
-        mspec.append(mspec_test)
-
-        mfcc_test = np.array(mfcc)
-        cstft_test = np.array(cstft)
-        mspec_test = np.array(mspec)
-
-        # Model prediction
-        with st.spinner('AI анализирует данные...'):
-            result = model.predict({
-                "mfcc": mfcc_test,
-                "croma": cstft_test,
-                "mspec": mspec_test
+        # Get predictions for each segment
+        segment_predictions = []
+        for segment in processed_segments:
+            pred = model.predict(segment, verbose=0)
+            segment_predictions.append(pred[0])
+        
+        # Aggregate predictions from all segments
+        final_predictions = aggregate_predictions(segment_predictions, 
+                                               method=aggregation_method)
+        
+        # Get predicted class and confidence
+        predicted_class_idx = np.argmax(final_predictions)
+        confidence = final_predictions[predicted_class_idx]
+        
+        # Get predictions per segment
+        segment_results = []
+        for i, pred in enumerate(segment_predictions):
+            idx = np.argmax(pred)
+            segment_results.append({
+                'segment': i,
+                'predicted_class': classes[idx],
+                'confidence': float(pred[idx])
             })
-
-        # Process results
-        disease_array = ['Астма', 'Бронхоэктаз', 'Бронхиолит', 'Хроническая обструктивная болезнь лёгких', 
-                        'Здоров', 'Инфекции нижних дыхательных путей', 'Пневмония', 'Инфекционное заболевание верхних дыхательных путей']
-        result = result.flatten()
         
-        # Get top-3 predictions
-        sorted_indices = np.argsort(result)[::-1][:3]
+        return {
+            'predicted_class': classes[predicted_class_idx],
+            'confidence': float(confidence),
+            'all_probabilities': {
+                class_name: float(prob) 
+                for class_name, prob in zip(classes, final_predictions)
+            },
+            'segment_predictions': segment_results,
+            'num_segments': len(processed_segments)
+        }
         
-        return [
-            {
-                'disorder': disease_array[idx],
-                'probability': result[idx] * 100
-            }
-            for idx in sorted_indices
-        ]
-    
     except Exception as e:
-        st.error(f"Ошибка при обработке аудиофайла: {str(e)}")
-        return None
+        return {
+            'error': f'Prediction failed: {str(e)}'
+        }
 
-def main():
-    # Main page header
-    st.title("🫁 AI Анализ Респираторных Заболеваний")
-    st.markdown("""
-    Загрузите аудиозапись дыхательных звуков для анализа с помощью искусственного интеллекта.
-    Система определит вероятность различных респираторных заболеваний на основе паттернов дыхания.
-    """)
-
-    # Model loading
-    try:
-        model = load_classification_model()
-    except Exception as e:
-        st.error("❌ Ошибка загрузки модели. Пожалуйста, проверьте наличие файла модели.")
-        return
-
-    # File uploader with clear instructions
-    st.markdown("""
-    <div class="upload-header">
-        <h3>📤 Загрузка аудиофайла</h3>
-        <p>Поддерживается формат WAV</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    uploaded_file = st.file_uploader("", type=['wav'])
-
-    if uploaded_file is not None:
-        # Create columns for better layout
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.audio(uploaded_file, format='audio/wav')
-        
-        with col2:
-            st.markdown("""
-            **Информация о файле:**  
-            - Имя: {}  
-            - Размер: {:.2f} MB
-            """.format(
-                uploaded_file.name,
-                uploaded_file.size / (1024*1024)
-            ))
-
-        # Analysis button
-        if st.button("🔬 Начать анализ", key="analyze_button"):
-            # Progress tracking
-            progress_text = "Операция в процессе. Пожалуйста, подождите."
-            my_bar = st.progress(0, text=progress_text)
-
-            # Temporary file handling
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                temp_path = tmp_file.name
-
-            # Analysis process with visual feedback
-            for percent_complete in range(100):
-                time.sleep(0.01)
-                my_bar.progress(percent_complete + 1, text=progress_text)
-            
-            # Get classification results
-            results = classify_audio(temp_path, model)
-            os.unlink(temp_path)
-
-            if results:
-                # Update session history
-                st.session_state.history.append({
-                    'date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    'diagnosis': results[0]['disorder'],
-                    'probability': results[0]['probability']
-                })
-
-                # Display results in an organized layout
-                st.markdown("### 📊 Результаты анализа")
-                
-                # Primary result with gauge chart
-                st.markdown("""
-                <div class="result-card">
-                    <h4>Основной диагноз</h4>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                primary = results[0]
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    st.plotly_chart(create_gauge_chart(
-                        primary['probability'],
-                        primary['disorder']
-                    ), use_container_width=True)
-                
-                with col2:
-                    st.markdown(f"""
-                    ### {primary['disorder']}
-                    Вероятность: **{primary['probability']:.1f}%**
-                    
-                    *Основное предполагаемое заболевание*
-                    """)
-
-                # Secondary results
-                st.markdown("#### Дополнительные возможные диагнозы:")
-                cols = st.columns(len(results[1:]))
-                for idx, result in enumerate(results[1:]):
-                    with cols[idx]:
-                        st.markdown(f"""
-                        <div class="result-card">
-                            <h5>{result['disorder']}</h5>
-                            <p>Вероятность: {result['probability']:.1f}%</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                # Disclaimer
-                st.markdown("""
-                <div class="disclaimer">
-                    ⚠️ <strong>Важное примечание:</strong><br>
-                    Данный инструмент предназначен только для образовательных целей и не заменяет 
-                    профессиональную медицинскую диагностику. Пожалуйста, обратитесь к квалифицированному 
-                    медицинскому специалисту для получения точного диагноза.
-                </div>
-                """, unsafe_allow_html=True)
-
+# Example usage
 if __name__ == "__main__":
-    main()
+    # Example audio file path
+    audio_file = "/Users/user/Desktop/ml_tech/healthy.wav"
+    
+    # Get prediction
+    result = predict_lung_disease(audio_file, aggregation_method='mean')
+    
+    if 'error' not in result:
+        print(f"Predicted Disease: {result['predicted_class']}")
+        print(f"Overall Confidence: {result['confidence']:.2%}")
+        print(f"\nNumber of segments analyzed: {result['num_segments']}")
+        print("\nPredictions by segment:")
+        for segment in result['segment_predictions']:
+            print(f"Segment {segment['segment']}: "
+                  f"{segment['predicted_class']} "
+                  f"({segment['confidence']:.2%})")
+        print("\nAll class probabilities:")
+        for disease, prob in result['all_probabilities'].items():
+            print(f"{disease}: {prob:.2%}")
+    else:
+        print(result['error'])
